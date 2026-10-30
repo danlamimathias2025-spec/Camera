@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import jsQR from 'jsqr';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/firebase';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -7,7 +8,7 @@ import { useScreenOrientation } from '../hooks/useScreenOrientation';
 import { StreamSettingsModal } from './StreamSettingsModal';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { StreamSettings, TelemetryData } from '../types';
-import { Info, AlertTriangle, LogOut, User as UserIcon, CheckCircle2, Sliders, Settings } from 'lucide-react';
+import { Info, AlertTriangle, LogOut, User as UserIcon, CheckCircle2, Sliders, Settings, X } from 'lucide-react';
 
 interface CameraStreamerProps {
   wsRef: React.MutableRefObject<WebSocket | null>;
@@ -68,6 +69,40 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
   const recordingTimerRef = useRef<any>(null);
 
   const viewfinderRef = useRef<HTMLDivElement | null>(null);
+
+  const [qrScannerActive, setQrScannerActive] = useState<boolean>(false);
+  const [scannedQrResult, setScannedQrResult] = useState<string | null>(null);
+  const [qrToastMessage, setQrToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!qrScannerActive || !isCameraActive || !videoRef.current || !canvasRef.current) return;
+
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState !== 4) return;
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: 'dontInvert'
+      });
+
+      if (code && code.data) {
+        setScannedQrResult(code.data);
+        setQrToastMessage(code.data);
+        setQrScannerActive(false);
+      }
+    }, 400);
+
+    return () => clearInterval(interval);
+  }, [qrScannerActive, isCameraActive]);
   const initialPinchDistRef = useRef<number | null>(null);
   const initialPinchZoomRef = useRef<number>(1.0);
 
@@ -804,6 +839,21 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           </button>
 
           <button
+            onClick={() => setQrScannerActive(!qrScannerActive)}
+            className={`w-10 h-10 rounded-full backdrop-blur-md flex items-center justify-center transition-all border ${
+              qrScannerActive ? 'bg-sky-400 text-black border-sky-300 shadow-lg shadow-sky-400/40 font-bold' : 'bg-black/40 text-white hover:bg-black/60 border-white/10'
+            }`}
+            title="QR Code Scanner Overlay"
+          >
+            <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <path d="M14 14h3v3h-3zM17 17h4v4h-4z" />
+            </svg>
+          </button>
+
+          <button
             onClick={() => setShowSettingsModal(true)}
             className="w-10 h-10 rounded-full bg-indigo-600/70 backdrop-blur-md flex items-center justify-center text-white hover:bg-indigo-600 active:scale-95 transition-all shadow-md border border-white/10"
             title="Adjust Video Quality, FPS & Bitrate"
@@ -908,6 +958,63 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             filter: nightModeActive ? 'brightness(2.3) contrast(1.25) saturate(1.15)' : 'none'
           }}
         />
+
+        {/* QR Scanner Active Targeting Box Overlay */}
+        {qrScannerActive && (
+          <div className="absolute inset-0 pointer-events-none z-30 flex items-center justify-center">
+            <div className="w-64 h-64 border-2 border-sky-400 rounded-2xl relative shadow-[0_0_20px_rgba(56,189,248,0.5)] animate-pulse flex items-center justify-center">
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-sky-300 rounded-tl-xl" />
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-sky-300 rounded-tr-xl" />
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-sky-300 rounded-bl-xl" />
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-sky-300 rounded-br-xl" />
+              <span className="absolute -bottom-8 px-3 py-1 rounded-full bg-sky-950/90 border border-sky-400/80 text-sky-300 text-xs font-bold shadow-lg">
+                Scanning QR Code...
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* QR Code Scan Result Toast Overlay */}
+        {qrToastMessage && (
+          <div className="absolute top-20 left-4 right-4 z-50 max-w-md mx-auto p-4 rounded-2xl bg-sky-950/95 border border-sky-400/80 text-white text-xs shadow-2xl animate-fade-in space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-bold text-sky-300">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /></svg>
+                <span>QR Code Result</span>
+              </div>
+              <button 
+                onClick={() => setQrToastMessage(null)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="font-mono text-white break-all bg-black/50 p-2.5 rounded-xl border border-white/10 text-xs">{scannedQrResult}</p>
+            <div className="flex items-center gap-2 pt-1">
+              {scannedQrResult && (scannedQrResult.startsWith('http://') || scannedQrResult.startsWith('https://')) ? (
+                <a
+                  href={scannedQrResult}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex-1 py-2 bg-sky-500 hover:bg-sky-400 text-black font-extrabold text-center rounded-xl text-xs transition-colors"
+                >
+                  Open Link
+                </a>
+              ) : null}
+              <button
+                onClick={() => {
+                  if (scannedQrResult) navigator.clipboard.writeText(scannedQrResult);
+                  setSaveToastNotice('Copied QR text to clipboard!');
+                  setTimeout(() => setSaveToastNotice(null), 2500);
+                  setQrToastMessage(null);
+                }}
+                className="flex-1 py-2 bg-white/15 hover:bg-white/25 text-white font-bold text-center rounded-xl text-xs transition-colors"
+              >
+                Copy Text
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Dynamic Zoom Level Badge Overlay when Pinching or Zooming */}
         {showZoomBadge && (
