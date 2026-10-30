@@ -5,6 +5,7 @@ import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 import { useGeolocation } from '../hooks/useGeolocation';
 import { useScreenOrientation } from '../hooks/useScreenOrientation';
 import { StreamSettingsModal } from './StreamSettingsModal';
+import { ImagePreviewModal } from './ImagePreviewModal';
 import { StreamSettings, TelemetryData } from '../types';
 import { Info, AlertTriangle, LogOut, User as UserIcon, CheckCircle2, Sliders, Settings } from 'lucide-react';
 
@@ -42,11 +43,27 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
   const [flashActive, setFlashActive] = useState<boolean>(false);
   const [nightModeActive, setNightModeActive] = useState<boolean>(false);
   const [cameraMode, setCameraMode] = useState<'CINEMATIC' | 'VIDEO' | 'PHOTO' | 'PORTRAIT' | 'PANO'>('PHOTO');
-  const [zoomLevel, setZoomLevel] = useState<string>('1x');
+  const [zoomFactor, setZoomFactor] = useState<number>(1.0);
+  const zoomFactorRef = useRef<number>(1.0);
+  zoomFactorRef.current = zoomFactor;
+  const [showZoomBadge, setShowZoomBadge] = useState<boolean>(false);
+  const zoomBadgeTimerRef = useRef<any>(null);
+
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [showAccountMenu, setShowAccountMenu] = useState<boolean>(false);
   const [showShutterFlash, setShowShutterFlash] = useState<boolean>(false);
   const [saveToastNotice, setSaveToastNotice] = useState<string | null>(null);
+
+  const [showPreviewModal, setShowPreviewModal] = useState<boolean>(false);
+  const [previewPhotoUrl, setPreviewPhotoUrl] = useState<string | null>(null);
+
+  const longPressTimerRef = useRef<any>(null);
+  const isLongPressTriggeredRef = useRef<boolean>(false);
+  const [isBurstActive, setIsBurstActive] = useState<boolean>(false);
+
+  const viewfinderRef = useRef<HTMLDivElement | null>(null);
+  const initialPinchDistRef = useRef<number | null>(null);
+  const initialPinchZoomRef = useRef<number>(1.0);
 
   const { location } = useGeolocation();
   const orientationState = useScreenOrientation();
@@ -137,12 +154,22 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
 
       const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+      const getResolutionDims = (res: string) => {
+        if (res === '8K') return { width: 7680, height: 4320 };
+        if (res === '480p') return { width: 854, height: 480 };
+        if (res === '360p') return { width: 640, height: 360 };
+        if (res === '1080p') return { width: 1920, height: 1080 };
+        return { width: 3840, height: 2160 }; // 4K default/fallback for high quality
+      };
+
+      const dims = getResolutionDims(streamSettings.resolution);
+
       // Progressive camera constraints (avoids forced resolution dimension mismatches on back camera)
       const constraintsList: MediaStreamConstraints[] = [
         {
           video: {
             facingMode: { ideal: desiredFacingMode },
-            ...(isMobile ? {} : { width: { ideal: 1280 }, height: { ideal: 720 } }),
+            ...(isMobile ? {} : { width: { ideal: dims.width }, height: { ideal: dims.height } }),
             frameRate: { ideal: streamSettings.fps }
           },
           audio: false
@@ -419,7 +446,100 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
     return () => clearInterval(intervalId);
   }, [isCameraActive, wsConnected, facingMode, wsRef]);
 
-  // Shutter action (takes photo snapshot, screen flash, and saves directly to device storage)
+  const handleDirectSaveToDevice = (finalDataUrl: string, fileName: string) => {
+    const downloadLink = document.createElement('a');
+    downloadLink.href = finalDataUrl;
+    downloadLink.download = fileName;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+
+    setSaveToastNotice(`Photo saved to phone storage (${fileName})`);
+    setTimeout(() => setSaveToastNotice(null), 3500);
+  };
+
+  const handleBurstCapture = () => {
+    isLongPressTriggeredRef.current = true;
+    setIsBurstActive(true);
+
+    if (!videoRef.current || !canvasRef.current || !isCameraActive) {
+      setIsBurstActive(false);
+      return;
+    }
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+
+    let count = 0;
+    const burstCount = 5;
+
+    const captureNext = () => {
+      if (count >= burstCount) {
+        setIsBurstActive(false);
+        setSaveToastNotice(`Burst Mode: Captured ${burstCount} photos in rapid succession!`);
+        setTimeout(() => setSaveToastNotice(null), 4000);
+        return;
+      }
+
+      setShowShutterFlash(true);
+      setTimeout(() => setShowShutterFlash(false), 90);
+
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      if (canvas && video) {
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          if (facingMode === 'user') {
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+          }
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const photoData = canvas.toDataURL('image/jpeg', 0.95);
+          setCapturedPhoto(photoData);
+
+          const fileName = `IMG_${dateStr}_BURST${count + 1}.jpg`;
+          const downloadLink = document.createElement('a');
+          downloadLink.href = photoData;
+          downloadLink.download = fileName;
+          document.body.appendChild(downloadLink);
+          downloadLink.click();
+          document.body.removeChild(downloadLink);
+        }
+      }
+
+      count++;
+      if (count < burstCount) {
+        setTimeout(captureNext, 140);
+      } else {
+        setIsBurstActive(false);
+        setSaveToastNotice(`Burst Mode: Captured ${burstCount} photos in rapid succession!`);
+        setTimeout(() => setSaveToastNotice(null), 4000);
+      }
+    };
+
+    captureNext();
+  };
+
+  const handleShutterMouseDown = () => {
+    isLongPressTriggeredRef.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      handleBurstCapture();
+    }, 500);
+  };
+
+  const handleShutterMouseUp = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    if (!isLongPressTriggeredRef.current) {
+      handleShutterClick();
+    }
+  };
+
+  // Shutter action (takes photo snapshot, screen flash, and opens Image Preview Modal with 8K AI Enhancer)
   const handleShutterClick = () => {
     setShowShutterFlash(true);
     setTimeout(() => setShowShutterFlash(false), 120);
@@ -438,35 +558,112 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const photoData = canvas.toDataURL('image/jpeg', 0.95);
         setCapturedPhoto(photoData);
-
-        // Generate timestamped filename
-        const now = new Date();
-        const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-        const fileName = `IMG_${dateStr}.jpg`;
-
-        // Direct download trigger: saves directly to user's phone / device storage
-        const downloadLink = document.createElement('a');
-        downloadLink.href = photoData;
-        downloadLink.download = fileName;
-        document.body.appendChild(downloadLink);
-        downloadLink.click();
-        document.body.removeChild(downloadLink);
-
-        // Notify user of direct saving
-        setSaveToastNotice(`Photo saved to phone storage (${fileName})`);
-        setTimeout(() => setSaveToastNotice(null), 3500);
+        setPreviewPhotoUrl(photoData);
+        setShowPreviewModal(true);
       }
     } else {
       startCamera(facingMode);
     }
   };
 
-  // Zoom scale multiplier
-  const getZoomScale = () => {
-    if (zoomLevel === '.5') return 0.75;
-    if (zoomLevel === '3') return 1.6;
-    return 1.0;
+  const handleOpenCapturedPreview = () => {
+    if (capturedPhoto) {
+      setPreviewPhotoUrl(capturedPhoto);
+      setShowPreviewModal(true);
+    } else {
+      handleShutterClick();
+    }
   };
+
+  // Apply hardware camera track zoom if supported by device/browser
+  const applyCameraHardwareZoom = useCallback((zoomVal: number) => {
+    try {
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (track && typeof track.getCapabilities === 'function') {
+        const caps = track.getCapabilities() as any;
+        if (caps && caps.zoom) {
+          const minZ = caps.zoom.min || 1;
+          const maxZ = caps.zoom.max || 200;
+          const targetZ = Math.min(maxZ, Math.max(minZ, zoomVal));
+          track.applyConstraints({
+            advanced: [{ zoom: targetZ } as any]
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {}
+  }, []);
+
+  const triggerZoomChange = useCallback((newZoom: number) => {
+    const clamped = Math.min(200.0, Math.max(0.5, Number(newZoom.toFixed(1))));
+    setZoomFactor(clamped);
+    applyCameraHardwareZoom(clamped);
+
+    setShowZoomBadge(true);
+    if (zoomBadgeTimerRef.current) clearTimeout(zoomBadgeTimerRef.current);
+    zoomBadgeTimerRef.current = setTimeout(() => {
+      setShowZoomBadge(false);
+    }, 1800);
+  }, [applyCameraHardwareZoom]);
+
+  // Two-Finger Touch Pinch-To-Zoom Handler on Viewfinder
+  useEffect(() => {
+    const el = viewfinderRef.current;
+    if (!el) return;
+
+    const getTouchDist = (touches: TouchList) => {
+      if (touches.length < 2) return 0;
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault(); // Prevents browser webpage zooming
+        initialPinchDistRef.current = getTouchDist(e.touches);
+        initialPinchZoomRef.current = zoomFactorRef.current;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && initialPinchDistRef.current && initialPinchDistRef.current > 0) {
+        e.preventDefault(); // Prevents browser webpage zooming
+        const currDist = getTouchDist(e.touches);
+        if (currDist > 0) {
+          const ratio = currDist / initialPinchDistRef.current;
+          const targetZoom = initialPinchZoomRef.current * ratio;
+          triggerZoomChange(targetZoom);
+        }
+      }
+    };
+
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        initialPinchDistRef.current = null;
+      }
+    };
+
+    // Prevent Safari gesture start/change
+    const preventGesture = (e: Event) => {
+      e.preventDefault();
+    };
+
+    el.addEventListener('touchstart', handleTouchStart, { passive: false });
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    el.addEventListener('touchend', handleTouchEnd, { passive: false });
+    el.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+    el.addEventListener('gesturestart', preventGesture, { passive: false });
+    el.addEventListener('gesturechange', preventGesture, { passive: false });
+
+    return () => {
+      el.removeEventListener('touchstart', handleTouchStart);
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchcancel', handleTouchEnd);
+      el.removeEventListener('gesturestart', preventGesture);
+      el.removeEventListener('gesturechange', preventGesture);
+    };
+  }, [triggerZoomChange]);
 
   return (
     <div className="fixed inset-0 w-full h-full bg-black z-30 overflow-hidden flex flex-col justify-between select-none">
@@ -589,8 +786,12 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
         </div>
       )}
 
-      {/* Camera Viewfinder Area (Edge to Edge) */}
-      <div className="relative flex-1 w-full bg-black overflow-hidden flex items-center justify-center">
+      {/* Camera Viewfinder Area (Edge to Edge with Touch Pinch-to-Zoom) */}
+      <div 
+        ref={viewfinderRef}
+        className="relative flex-1 w-full bg-black overflow-hidden flex items-center justify-center touch-none select-none"
+        style={{ touchAction: 'none' }}
+      >
         
         {/* Live Camera Stream Video */}
         <video
@@ -598,13 +799,21 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           autoPlay
           playsInline
           muted
-          className={`w-full h-full object-cover absolute inset-0 transition-transform duration-300 ${
+          className={`w-full h-full object-cover absolute inset-0 transition-transform duration-150 ${
             !isCameraActive ? 'hidden' : 'block'
           }`}
           style={{
-            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'} scale(${getZoomScale()})`
+            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'} scale(${zoomFactor})`
           }}
         />
+
+        {/* Dynamic Zoom Level Badge Overlay when Pinching or Zooming */}
+        {showZoomBadge && (
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 px-3.5 py-1.5 rounded-full bg-black/80 backdrop-blur-md border border-amber-400/60 text-[#eab308] text-xs font-black tracking-wide shadow-2xl animate-fade-in flex items-center gap-1">
+            <span>{zoomFactor.toFixed(1)}x</span>
+            <span className="text-[10px] text-white/70 font-semibold uppercase">Zoom</span>
+          </div>
+        )}
 
         {/* Toast when photo is saved to phone storage */}
         {saveToastNotice && (
@@ -638,21 +847,31 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           </div>
         )}
 
-        {/* Zoom Selector: .5   1x   3 */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center bg-black/60 backdrop-blur-md rounded-full p-1 border border-white/10 shadow-lg">
-          {(['.5', '1x', '3'] as const).map(z => (
-            <button
-              key={z}
-              onClick={() => setZoomLevel(z)}
-              className={`w-8 h-8 rounded-full text-xs font-bold flex items-center justify-center transition-all ${
-                zoomLevel === z
-                  ? 'bg-black/90 text-[#eab308] border border-white/20 shadow-sm scale-110'
-                  : 'text-white/80 hover:text-white'
-              }`}
-            >
-              {z}
-            </button>
-          ))}
+        {/* Zoom Selector Presets: .5   1x   10x   50x   100x   200x */}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-black/70 backdrop-blur-md rounded-full p-1 border border-white/15 shadow-xl max-w-[92vw] overflow-x-auto">
+          {[
+            { label: '.5', val: 0.5 },
+            { label: '1x', val: 1.0 },
+            { label: '10x', val: 10.0 },
+            { label: '50x', val: 50.0 },
+            { label: '100x', val: 100.0 },
+            { label: '200x', val: 200.0 }
+          ].map(preset => {
+            const isMatch = Math.abs(zoomFactor - preset.val) < (preset.val * 0.2);
+            return (
+              <button
+                key={preset.label}
+                onClick={() => triggerZoomChange(preset.val)}
+                className={`px-2.5 h-7 rounded-full text-[11px] font-black flex items-center justify-center transition-all shrink-0 ${
+                  isMatch
+                    ? 'bg-amber-400 text-black shadow-md font-extrabold scale-105'
+                    : 'text-white/80 hover:text-white bg-white/10 hover:bg-white/20'
+                }`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
         </div>
 
       </div>
@@ -682,9 +901,9 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           
           {/* Photo Gallery Thumbnail (Left) */}
           <div
-            onClick={handleShutterClick}
+            onClick={handleOpenCapturedPreview}
             className="w-13 h-13 rounded-2xl bg-[#1c1c1e] border border-white/20 overflow-hidden shadow-md flex items-center justify-center cursor-pointer hover:opacity-90 active:scale-95 transition-all"
-            title="Recent Photo"
+            title="Preview Photo & 8K AI Enhancer"
           >
             {capturedPhoto ? (
               <img src={capturedPhoto} alt="Last capture" className="w-full h-full object-cover" />
@@ -699,15 +918,24 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             )}
           </div>
 
-          {/* Shutter Button (Center) - Authentic Double Ring Style */}
+          {/* Shutter Button (Center) - Authentic Double Ring Style with Long-Press Burst Mode */}
           <button
-            onClick={handleShutterClick}
-            className="w-[76px] h-[76px] rounded-full border-[4px] border-white p-[4px] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl"
-            title="Take Photo / Stream"
+            onMouseDown={handleShutterMouseDown}
+            onMouseUp={handleShutterMouseUp}
+            onMouseLeave={handleShutterMouseUp}
+            onTouchStart={handleShutterMouseDown}
+            onTouchEnd={handleShutterMouseUp}
+            className="w-[76px] h-[76px] rounded-full border-[4px] border-white p-[4px] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl relative select-none"
+            title="Tap to take photo / Long-press for 5-photo burst mode"
           >
+            {isBurstActive && (
+              <span className="absolute -top-7 px-2 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-black animate-bounce shadow-md">
+                BURST...
+              </span>
+            )}
             <div
               className={`w-full h-full rounded-full transition-all duration-150 ${
-                cameraMode === 'VIDEO' ? 'bg-[#ff3b30] rounded-xl scale-75' : 'bg-white'
+                cameraMode === 'VIDEO' ? 'bg-[#ff3b30] rounded-xl scale-75' : isBurstActive ? 'bg-amber-400 scale-90' : 'bg-white'
               }`}
             />
           </button>
@@ -743,6 +971,14 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           // Restart camera with new settings
           startCamera(facingMode);
         }}
+      />
+
+      {/* Image Preview & 8K AI Super Resolution Enhancer Modal */}
+      <ImagePreviewModal
+        isOpen={showPreviewModal}
+        photoUrl={previewPhotoUrl}
+        onClose={() => setShowPreviewModal(false)}
+        onSaveToDevice={handleDirectSaveToDevice}
       />
 
     </div>

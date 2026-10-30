@@ -17,13 +17,15 @@ export const StreamSettingsModal: React.FC<StreamSettingsModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const handlePresetSelect = (preset: 'saver' | 'balanced' | 'pro') => {
+  const handlePresetSelect = (preset: 'saver' | 'balanced' | 'pro' | '8k') => {
     if (preset === 'saver') {
       onSaveSettings({ resolution: '360p', fps: 15, bitrateKbps: 500 });
     } else if (preset === 'balanced') {
       onSaveSettings({ resolution: '720p', fps: 30, bitrateKbps: 2500 });
     } else if (preset === 'pro') {
-      onSaveSettings({ resolution: '1080p', fps: 60, bitrateKbps: 5000 });
+      onSaveSettings({ resolution: '1080p', fps: 60, bitrateKbps: 8000 });
+    } else if (preset === '8k') {
+      onSaveSettings({ resolution: '8K', fps: 60, bitrateKbps: 25000 });
     }
   };
 
@@ -68,11 +70,11 @@ export const StreamSettingsModal: React.FC<StreamSettingsModalProps> = ({
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             Quick Performance Presets
           </span>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             <button
               type="button"
               onClick={() => handlePresetSelect('saver')}
-              className={`p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+              className={`p-2 rounded-xl border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all ${
                 settings.resolution === '360p' && settings.fps === 15
                   ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
                   : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800'
@@ -85,27 +87,40 @@ export const StreamSettingsModal: React.FC<StreamSettingsModalProps> = ({
             <button
               type="button"
               onClick={() => handlePresetSelect('balanced')}
-              className={`p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+              className={`p-2 rounded-xl border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all ${
                 settings.resolution === '720p' && settings.fps === 30
                   ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
                   : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800'
               }`}
             >
-              <span>Balanced (Recommended)</span>
+              <span>Balanced</span>
               <span className="text-[10px] text-slate-400 font-normal">720p • 30fps</span>
             </button>
 
             <button
               type="button"
               onClick={() => handlePresetSelect('pro')}
-              className={`p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center gap-1 transition-all ${
+              className={`p-2 rounded-xl border text-xs font-semibold flex flex-col items-center gap-0.5 transition-all ${
                 settings.resolution === '1080p' && settings.fps === 60
                   ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300'
                   : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800'
               }`}
             >
-              <span>Ultra HD</span>
+              <span>Full HD</span>
               <span className="text-[10px] text-slate-400 font-normal">1080p • 60fps</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handlePresetSelect('8k')}
+              className={`p-2 rounded-xl border text-xs font-bold flex flex-col items-center gap-0.5 transition-all ${
+                settings.resolution === '8K'
+                  ? 'bg-amber-600/30 border-amber-500 text-amber-300 shadow-lg shadow-amber-500/20'
+                  : 'bg-amber-950/40 border-amber-800/60 text-amber-300 hover:bg-amber-900/60'
+              }`}
+            >
+              <span className="flex items-center gap-1">8K Ultra</span>
+              <span className="text-[10px] opacity-80 font-normal">7680x4320</span>
             </button>
           </div>
         </div>
@@ -117,17 +132,17 @@ export const StreamSettingsModal: React.FC<StreamSettingsModalProps> = ({
               <Video className="w-4 h-4 text-indigo-400" />
               Camera Resolution
             </span>
-            <span className="text-xs font-mono text-indigo-400">{settings.resolution}</span>
+            <span className="text-xs font-mono font-bold text-amber-400">{settings.resolution}</span>
           </label>
-          <div className="grid grid-cols-4 gap-2">
-            {(['1080p', '720p', '480p', '360p'] as const).map((res) => (
+          <div className="grid grid-cols-6 gap-1.5">
+            {(['8K', '4K', '1080p', '720p', '480p', '360p'] as const).map((res) => (
               <button
                 key={res}
                 type="button"
                 onClick={() => onSaveSettings({ ...settings, resolution: res })}
-                className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                className={`py-2 px-1 rounded-xl border text-xs font-bold text-center transition-all ${
                   settings.resolution === res
-                    ? 'bg-indigo-600 border-indigo-500 text-white shadow-md'
+                    ? res === '8K' ? 'bg-amber-600 border-amber-400 text-white shadow-md' : 'bg-indigo-600 border-indigo-500 text-white shadow-md'
                     : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'
                 }`}
               >
@@ -177,13 +192,13 @@ export const StreamSettingsModal: React.FC<StreamSettingsModalProps> = ({
                 : `${settings.bitrateKbps} kbps`}
             </span>
           </label>
-          <div className="grid grid-cols-5 gap-1.5">
-            {([500, 1000, 2500, 5000, 8000] as const).map((b) => (
+          <div className="grid grid-cols-6 gap-1">
+            {([1000, 2500, 5000, 8000, 15000, 25000] as const).map((b) => (
               <button
                 key={b}
                 type="button"
                 onClick={() => onSaveSettings({ ...settings, bitrateKbps: b })}
-                className={`py-2 px-1.5 rounded-xl border text-[11px] font-bold text-center transition-all ${
+                className={`py-2 px-1 rounded-xl border text-[11px] font-bold text-center transition-all ${
                   settings.bitrateKbps === b
                     ? 'bg-amber-600 border-amber-500 text-white shadow-md'
                     : 'bg-slate-800/80 border-slate-700 text-slate-300 hover:bg-slate-700'

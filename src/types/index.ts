@@ -28,7 +28,7 @@ export interface TelemetryData {
 }
 
 export interface StreamSettings {
-  resolution: '1080p' | '720p' | '480p' | '360p';
+  resolution: '8K' | '4K' | '1080p' | '720p' | '480p' | '360p';
   fps: 15 | 30 | 60;
   bitrateKbps: number;
 }
