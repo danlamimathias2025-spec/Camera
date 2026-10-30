@@ -594,7 +594,7 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
   }, []);
 
   const triggerZoomChange = useCallback((newZoom: number) => {
-    const clamped = Math.min(200.0, Math.max(0.5, Number(newZoom.toFixed(1))));
+    const clamped = Math.min(200.0, Math.max(0.2, Number(newZoom.toFixed(1))));
     setZoomFactor(clamped);
     applyCameraHardwareZoom(clamped);
 
@@ -803,7 +803,7 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             !isCameraActive ? 'hidden' : 'block'
           }`}
           style={{
-            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'} scale(${zoomFactor})`
+            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'}`
           }}
         />
 
@@ -847,9 +847,10 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           </div>
         )}
 
-        {/* Zoom Selector Presets: .5   1x   10x   50x   100x   200x */}
+        {/* Zoom Selector Presets: .2   .5   1x   10x   50x   100x   200x */}
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-black/70 backdrop-blur-md rounded-full p-1 border border-white/15 shadow-xl max-w-[92vw] overflow-x-auto">
           {[
+            { label: '.2', val: 0.2 },
             { label: '.5', val: 0.5 },
             { label: '1x', val: 1.0 },
             { label: '10x', val: 10.0 },

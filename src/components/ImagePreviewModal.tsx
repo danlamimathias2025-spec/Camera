@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as ort from 'onnxruntime-web';
-import { X, Sparkles, Download, Share2, RefreshCw, CheckCircle2, Image as ImageIcon, Sliders, Zap, ShieldCheck, Cpu } from 'lucide-react';
+import { X, Sparkles, Download, Share2, RefreshCw, CheckCircle2, Image as ImageIcon, Sliders, Cpu, ArrowLeftRight } from 'lucide-react';
 
 interface ImagePreviewModalProps {
   isOpen: boolean;
@@ -35,6 +35,11 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
   const [hardwareAccelerated, setHardwareAccelerated] = useState<boolean>(true);
 
+  // Before/After comparison slider position (0 - 100)
+  const [sliderPos, setSliderPos] = useState<number>(50);
+  const [isDraggingSlider, setIsDraggingSlider] = useState<boolean>(false);
+  const comparisonContainerRef = useRef<HTMLDivElement | null>(null);
+
   const [imageMeta, setImageMeta] = useState<{ width: number; height: number; sizeMb: string }>({
     width: 0,
     height: 0,
@@ -65,6 +70,45 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
     setEnhancedDataUrl(null);
   }, [photoUrl]);
 
+  // Handle Before/After slider drag
+  const handleSliderMove = useCallback((clientX: number) => {
+    if (!comparisonContainerRef.current) return;
+    const rect = comparisonContainerRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const pct = Math.min(100, Math.max(0, (x / rect.width) * 100));
+    setSliderPos(pct);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingSlider) return;
+      handleSliderMove(e.clientX);
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!isDraggingSlider) return;
+      if (e.touches[0]) {
+        handleSliderMove(e.touches[0].clientX);
+      }
+    };
+
+    const handleMouseUp = () => setIsDraggingSlider(false);
+
+    if (isDraggingSlider) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('touchmove', handleTouchMove);
+      window.addEventListener('touchend', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleMouseUp);
+    };
+  }, [isDraggingSlider, handleSliderMove]);
+
   if (!isOpen || !photoUrl) return null;
 
   // Load Real-ESRGAN ONNX Inference Session with WebGPU -> WASM Fallback
@@ -74,7 +118,6 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
     for (const modelUrl of REAL_ESRGAN_ONNX_URLS) {
       try {
         setStatusMessage('Loading Real-ESRGAN ONNX model into WebGPU/WASM...');
-        // Try WebGPU execution provider first, fallback to WASM
         try {
           const session = await ort.InferenceSession.create(modelUrl, {
             executionProviders: ['webgpu', 'wasm'],
@@ -136,6 +179,57 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
     return imageData;
   };
 
+  // Apply bold, sharp, vibrant post-inference visual polish (Unsharp mask, Clarity, Vibrancy & Color Punch)
+  const applyAIEnhancementPolish = (imgData: ImageData) => {
+    const data = imgData.data;
+    const w = imgData.width;
+    const h = imgData.height;
+    const copy = new Uint8ClampedArray(data);
+    const sharpenStrength = 1.8; // 1.5 - 2.0 unsharp mask strength
+
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        const top = ((y - 1) * w + x) * 4;
+        const bottom = ((y + 1) * w + x) * 4;
+        const left = (y * w + (x - 1)) * 4;
+        const right = (y * w + (x + 1)) * 4;
+
+        for (let c = 0; c < 3; c++) {
+          const centerVal = copy[idx + c];
+          const avgNeighbors = (copy[top + c] + copy[bottom + c] + copy[left + c] + copy[right + c]) / 4;
+          const sharpened = centerVal + (centerVal - avgNeighbors) * sharpenStrength;
+
+          // Micro-Contrast & Clarity (midtone contrast boost)
+          let val = Math.min(255, Math.max(0, sharpened));
+          const midtoneDelta = (val - 128) / 128;
+          val = val + midtoneDelta * (1 - Math.abs(midtoneDelta)) * 24;
+
+          // Deepen dark areas slightly for depth & haze reduction
+          if (val < 70) {
+            val = Math.max(0, val * 0.90);
+          }
+
+          data[idx + c] = Math.min(255, Math.max(0, val));
+        }
+      }
+    }
+
+    // Vibrancy & Color Punch (Saturation +15%) across all pixels
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      const satBoost = 1.15; // 15% saturation punch
+
+      data[i]     = Math.min(255, Math.max(0, gray + (r - gray) * satBoost));
+      data[i + 1] = Math.min(255, Math.max(0, gray + (g - gray) * satBoost));
+      data[i + 2] = Math.min(255, Math.max(0, gray + (b - gray) * satBoost));
+    }
+  };
+
   // Perform Real-ESRGAN Tiled / Chunked ONNX Inference & Canvas 8K Export
   const executeRealESRGANPipeline = async () => {
     if (isEnhanced && enhancedDataUrl) return;
@@ -185,30 +279,25 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
       if (session) {
         setStatusMessage('Running Real-ESRGAN ONNX tiled super-resolution...');
 
-        // Base image canvas
         const baseCanvas = document.createElement('canvas');
         baseCanvas.width = img.width || 1280;
         baseCanvas.height = img.height || 720;
         const baseCtx = baseCanvas.getContext('2d', { willReadFrequently: true });
         if (baseCtx) baseCtx.drawImage(img, 0, 0, baseCanvas.width, baseCanvas.height);
 
-        // Tile Processing Setup (e.g. 256x256 chunks to prevent WebGL/WebGPU OOM)
         const tileW = 256;
         const tileH = 256;
-        const scaleFactor = 4; // Real-ESRGAN 4x model
+        const scaleFactor = 4;
 
         const cols = Math.ceil(baseCanvas.width / tileW);
         const rows = Math.ceil(baseCanvas.height / tileH);
         const totalTiles = cols * rows;
         let completedTiles = 0;
 
-        // Temporary canvas for input tile extraction
         const tileInputCanvas = document.createElement('canvas');
         tileInputCanvas.width = tileW;
         tileInputCanvas.height = tileH;
         const tileInputCtx = tileInputCanvas.getContext('2d', { willReadFrequently: true });
-
-        // Temporary canvas for ONNX 4x output tile
         const tileOutputCanvas = document.createElement('canvas');
 
         for (let r = 0; r < rows; r++) {
@@ -222,14 +311,10 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
               tileInputCtx.clearRect(0, 0, tileW, tileH);
               const tileImageData = baseCtx.getImageData(x, y, currentW, currentH);
 
-              // Standardize tile size to tileW x tileH for ONNX tensor
               const stdTileImageData = new ImageData(tileW, tileH);
               stdTileImageData.data.set(tileImageData.data);
 
-              // Step 2: Convert to NCHW Float32Tensor
               const inputTensor = imageDataToNCHWTensor(stdTileImageData);
-
-              // Step 3: Run session.run() on tile
               const inputName = session.inputNames[0] || 'input';
               const feeds: Record<string, ort.Tensor> = {};
               feeds[inputName] = inputTensor;
@@ -239,7 +324,6 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
               const outputTensor = results[outputName];
 
               if (outputTensor) {
-                // Step 4: Post-process output tensor back to ImageData
                 const outW = tileW * scaleFactor;
                 const outH = tileH * scaleFactor;
                 const outTileImageData = tensorToImageData(outputTensor, outW, outH);
@@ -250,7 +334,6 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
                 if (tileOutCtx) {
                   tileOutCtx.putImageData(outTileImageData, 0, 0);
 
-                  // Draw upscaled tile onto 8K output canvas
                   const destX = (x / baseCanvas.width) * targetW;
                   const destY = (y / baseCanvas.height) * targetH;
                   const destW = (currentW / baseCanvas.width) * targetW;
@@ -266,45 +349,37 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
             }
 
             completedTiles++;
-            const pct = Math.round(20 + (completedTiles / totalTiles) * 65);
+            const pct = Math.round(20 + (completedTiles / totalTiles) * 60);
             setEnhancementProgress(pct);
             setStatusMessage(`Enhancing tile ${completedTiles}/${totalTiles} via Real-ESRGAN ONNX (${pct}%)...`);
 
-            // Yield control back to browser main thread so UI stays responsive
             await new Promise(r => setTimeout(r, 0));
           }
         }
       } else {
-        // High-definition Lanczos 8K Synthesis Fallback if ONNX model CDN is unroutable
         setStatusMessage('Applying High-Definition 8K Super Resolution Pass...');
-        
         outputCtx.imageSmoothingEnabled = true;
         outputCtx.imageSmoothingQuality = 'high';
         outputCtx.drawImage(img, 0, 0, targetW, targetH);
-
-        // Unsharp Mask & Sharpness Enhancement
-        const imgData = outputCtx.getImageData(0, 0, targetW, targetH);
-        const data = imgData.data;
-        const amount = 0.22;
-
-        for (let i = 0; i < data.length; i += 4) {
-          data[i] = Math.min(255, Math.max(0, data[i] + (data[i] - 128) * amount));
-          data[i + 1] = Math.min(255, Math.max(0, data[i + 1] + (data[i + 1] - 128) * amount));
-          data[i + 2] = Math.min(255, Math.max(0, data[i + 2] + (data[i + 2] - 128) * amount));
-        }
-
-        outputCtx.putImageData(imgData, 0, 0);
       }
 
-      setEnhancementProgress(92);
-      setStatusMessage('Finishing 8K Ultra HD JPEG Export...');
+      setEnhancementProgress(85);
+      setStatusMessage('Applying Bold 8K AI Sharpening, Clarity & Color Punch...');
+
+      // Post-Inference Visual Polish Step (Sharpening, Clarity, Vibrancy)
+      const polishedImgData = outputCtx.getImageData(0, 0, targetW, targetH);
+      applyAIEnhancementPolish(polishedImgData);
+      outputCtx.putImageData(polishedImgData, 0, 0);
+
+      setEnhancementProgress(95);
+      setStatusMessage('Finalizing 8K Ultra HD JPEG Export...');
 
       // Watermark Badge on 8K output
-      outputCtx.fillStyle = 'rgba(0, 0, 0, 0.70)';
-      outputCtx.fillRect(outputCanvas.width - 500, outputCanvas.height - 95, 470, 75);
+      outputCtx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+      outputCtx.fillRect(outputCanvas.width - 520, outputCanvas.height - 95, 490, 75);
       outputCtx.fillStyle = '#f59e0b';
       outputCtx.font = 'bold 28px sans-serif';
-      outputCtx.fillText('✨ REAL-ESRGAN 8K AI ENHANCED', outputCanvas.width - 480, outputCanvas.height - 48);
+      outputCtx.fillText('✨ REAL-ESRGAN 8K AI ENHANCED', outputCanvas.width - 500, outputCanvas.height - 48);
 
       const final8KUrl = outputCanvas.toDataURL('image/jpeg', 0.98);
 
@@ -405,21 +480,66 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
         </button>
       </div>
 
-      {/* Center Image Viewport */}
-      <div className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden p-2 sm:p-6">
+      {/* Center Image Viewport with Before/After Interactive Comparison Slider */}
+      <div 
+        ref={comparisonContainerRef}
+        className="relative flex-1 w-full bg-black flex items-center justify-center overflow-hidden p-2 sm:p-6 select-none"
+      >
         
-        {/* Main Photo Display */}
+        {/* Base Photo (Original) */}
         <img
-          src={currentDisplayUrl}
-          alt="Captured preview"
-          className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl transition-all duration-300"
+          src={photoUrl}
+          alt="Original capture"
+          className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl pointer-events-none"
         />
 
+        {/* Enhanced Photo Overlay (Split View via clip-path when enhanced and ready) */}
+        {isEnhanced && enhancedDataUrl && (
+          <div 
+            className="absolute inset-0 flex items-center justify-center p-2 sm:p-6 pointer-events-none overflow-hidden"
+            style={{
+              clipPath: `polygon(${sliderPos}% 0, 100% 0, 100% 100%, ${sliderPos}% 100%)`
+            }}
+          >
+            <img
+              src={enhancedDataUrl}
+              alt="Enhanced 8K capture"
+              className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl"
+            />
+          </div>
+        )}
+
+        {/* Interactive Comparison Split Divider Line & Handle */}
+        {isEnhanced && enhancedDataUrl && (
+          <div 
+            className="absolute top-0 bottom-0 z-30 flex items-center justify-center cursor-ew-resize"
+            style={{ left: `${sliderPos}%` }}
+            onMouseDown={() => setIsDraggingSlider(true)}
+            onTouchStart={() => setIsDraggingSlider(true)}
+          >
+            {/* Vertical Split Line */}
+            <div className="w-0.5 h-full bg-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.8)]" />
+            
+            {/* Drag Handle Knob */}
+            <div className="absolute w-9 h-9 rounded-full bg-amber-400 text-black shadow-2xl border-2 border-white flex items-center justify-center hover:scale-110 transition-transform">
+              <ArrowLeftRight className="w-4 h-4 font-bold" />
+            </div>
+
+            {/* Labels: BEFORE / AFTER */}
+            <div className="absolute top-4 left-3 px-2 py-0.5 rounded bg-black/70 backdrop-blur-md text-[10px] font-black text-white/90 border border-white/20">
+              ORIGINAL
+            </div>
+            <div className="absolute top-4 right-3 px-2 py-0.5 rounded bg-amber-500/95 backdrop-blur-md text-[10px] font-black text-black border border-amber-300">
+              8K ENHANCED
+            </div>
+          </div>
+        )}
+
         {/* Floating 8K AI Enhanced Badge */}
-        {isEnhanced && (
-          <div className="absolute top-6 right-6 z-30 px-3.5 py-1.5 rounded-full bg-amber-500/90 text-black text-xs font-black shadow-2xl flex items-center gap-1.5 border border-amber-300/60">
+        {isEnhanced && !isEnhancing && (
+          <div className="absolute top-6 right-6 z-30 px-3.5 py-1.5 rounded-full bg-amber-500/90 text-black text-xs font-black shadow-2xl flex items-center gap-1.5 border border-amber-300/60 pointer-events-none">
             <Sparkles className="w-4 h-4 text-black fill-black" />
-            <span>Real-ESRGAN 8K AI</span>
+            <span>Real-ESRGAN 8K AI (Drag to Compare)</span>
           </div>
         )}
 
@@ -468,7 +588,7 @@ export const ImagePreviewModal: React.FC<ImagePreviewModalProps> = ({
                 {isEnhanced ? '✨ Real-ESRGAN ONNX 8K ACTIVE' : '✨ Enable Real-ESRGAN ONNX 8K AI'}
               </div>
               <div className={`text-[10px] font-normal ${isEnhanced ? 'text-black/80' : 'text-slate-400'}`}>
-                {isEnhanced ? 'Image upscaled to 7680x4320 via WebGPU/WASM' : 'Client-side ONNX Runtime Web AI super-resolution'}
+                {isEnhanced ? 'Image upscaled to 7680x4320 with bold sharpening & vibrancy' : 'Client-side ONNX Runtime Web AI super-resolution'}
               </div>
             </div>
           </div>
