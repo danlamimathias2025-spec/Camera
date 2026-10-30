@@ -82,6 +82,20 @@
           "type": "string",
           "description": "Last presence heartbeat timestamp",
           "maxLength": 64
+        },
+        "orientation": {
+          "type": "string",
+          "description": "Device orientation mode (portrait or landscape)",
+          "enum": ["portrait", "landscape"]
+        },
+        "orientationAngle": {
+          "type": "number",
+          "description": "Device orientation rotation angle in degrees"
+        },
+        "lastOrientationChange": {
+          "type": "string",
+          "description": "Timestamp of last screen orientation change event",
+          "maxLength": 64
         }
       },
       "required": ["userId", "email", "name", "role", "facingMode", "isStreaming", "active"]

@@ -56,7 +56,10 @@ function AppContent() {
             role: data.role || 'user',
             facingMode: data.facingMode || 'environment',
             isStreaming: data.isStreaming !== false,
-            connectedAt: data.connectedAt || new Date().toISOString()
+            connectedAt: data.connectedAt || new Date().toISOString(),
+            location: data.location,
+            telemetry: data.telemetry,
+            streamSettings: data.streamSettings
           });
         }
       });

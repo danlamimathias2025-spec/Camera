@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { OnlineUser, NotificationItem } from '../types';
-import { Shield, Users, Video, Wifi, RefreshCw, Search, Bell, Monitor, UserCheck, UserX, Clock, Eye, Zap, Camera, Download, CheckCircle2, X } from 'lucide-react';
+import { DiagnosticPanel } from './DiagnosticPanel';
+import { Shield, Users, Video, Wifi, RefreshCw, Search, Bell, Monitor, UserCheck, UserX, Clock, Eye, Zap, Camera, Download, CheckCircle2, X, Activity, MapPin, Smartphone } from 'lucide-react';
 
 interface AdminDashboardProps {
   onlineUsers: OnlineUser[];
@@ -211,8 +212,18 @@ const WebRtcUserCard: React.FC<{
           </span>
         </div>
 
-        <div className="absolute bottom-3 left-3 px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-white text-[11px] pointer-events-none">
-          {user.facingMode === 'user' ? 'Front Lens' : 'Back Lens'}
+        <div className="absolute bottom-3 left-3 flex items-center gap-1.5 pointer-events-none">
+          <div className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur-md text-white text-[11px]">
+            {user.facingMode === 'user' ? 'Front Lens' : 'Back Lens'}
+          </div>
+          <div className={`px-2.5 py-1 rounded-full text-[11px] font-bold backdrop-blur-md flex items-center gap-1 ${
+            user.orientation === 'landscape'
+              ? 'bg-purple-900/80 text-purple-200 border border-purple-500/40'
+              : 'bg-black/60 text-sky-200'
+          }`}>
+            <Smartphone className={`w-3 h-3 transition-transform duration-300 ${user.orientation === 'landscape' ? 'rotate-90 text-purple-300' : 'text-sky-300'}`} />
+            <span className="capitalize">{user.orientation || 'portrait'}</span>
+          </div>
         </div>
 
         <button
@@ -315,6 +326,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [selectedUser, setSelectedUser] = useState<{ user: OnlineUser; stream: MediaStream | null } | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'streaming' | 'idle'>('all');
+  const [viewTab, setViewTab] = useState<'cameras' | 'diagnostics'>('cameras');
   const modalVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const filteredUsers = onlineUsers.filter(u => {
@@ -554,48 +566,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Online Users</span>
-            <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{onlineUsers.length}</div>
-          </div>
-          <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
-            <Users className="w-6 h-6" />
-          </div>
-        </div>
+      {/* Main Admin Tab Switcher */}
+      <div className="flex items-center gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-2xl w-fit">
+        <button
+          onClick={() => setViewTab('cameras')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+            viewTab === 'cameras'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+          }`}
+        >
+          <Video className="w-4 h-4" />
+          <span>Live Camera Feeds ({onlineUsers.length})</span>
+        </button>
 
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Active Camera Feeds</span>
-            <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{streamingUsersCount}</div>
-          </div>
-          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
-            <Video className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">System Notifications</span>
-            <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{notifications.length}</div>
-          </div>
-          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400">
-            <Bell className="w-6 h-6" />
-          </div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
-          <div>
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Protocol</span>
-            <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">WebRTC</div>
-          </div>
-          <div className="p-3 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
-            <Zap className="w-6 h-6" />
-          </div>
-        </div>
+        <button
+          onClick={() => setViewTab('diagnostics')}
+          className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+            viewTab === 'diagnostics'
+              ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span>Stream Diagnostics & Location Map</span>
+        </button>
       </div>
+
+      {viewTab === 'diagnostics' ? (
+        <DiagnosticPanel
+          onlineUsers={onlineUsers}
+          onSelectUser={(u) => setSelectedUser({ user: u, stream: null })}
+          onSwitchUserCamera={onSwitchUserCamera}
+        />
+      ) : (
+        <>
+          {/* Metrics Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Online Users</span>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{onlineUsers.length}</div>
+              </div>
+              <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400">
+                <Users className="w-6 h-6" />
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Active Camera Feeds</span>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{streamingUsersCount}</div>
+              </div>
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400">
+                <Video className="w-6 h-6" />
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">System Notifications</span>
+                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{notifications.length}</div>
+              </div>
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400">
+                <Bell className="w-6 h-6" />
+              </div>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-white dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/60 shadow-sm flex items-center justify-between">
+              <div>
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Protocol</span>
+                <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">WebRTC</div>
+              </div>
+              <div className="p-3 rounded-xl bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400">
+                <Zap className="w-6 h-6" />
+              </div>
+            </div>
+          </div>
 
       {/* Main Grid + Sidebar */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -710,6 +757,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       </div>
+        </>
+      )}
 
       {/* Full User Camera View Modal */}
       {selectedUser && activeSelectedUser && (
@@ -787,10 +836,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
 
               {/* Overlays */}
-              <div className="absolute top-3 left-3 flex items-center gap-2">
+              <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2">
                 <div className="px-3 py-1 rounded-full bg-black/60 text-white text-xs font-medium backdrop-blur-md flex items-center gap-1.5">
                   <Camera className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Lens: {activeSelectedUser.facingMode === 'user' ? 'Front (Selfie)' : 'Back (Wide)'}</span>
+                </div>
+                <div className={`px-3 py-1 rounded-full text-xs font-bold backdrop-blur-md flex items-center gap-1.5 ${
+                  activeSelectedUser.orientation === 'landscape'
+                    ? 'bg-purple-900/80 text-purple-200 border border-purple-500/40'
+                    : 'bg-black/60 text-sky-200'
+                }`}>
+                  <Smartphone className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                    activeSelectedUser.orientation === 'landscape' ? 'rotate-90 text-purple-300' : 'text-sky-300'
+                  }`} />
+                  <span className="capitalize">{activeSelectedUser.orientation || 'portrait'}</span>
+                  <span className="text-[10px] opacity-75">({activeSelectedUser.orientationAngle ?? 0}°)</span>
                 </div>
                 <div className="px-3 py-1 rounded-full bg-black/60 text-amber-300 text-xs font-medium backdrop-blur-md flex items-center gap-1.5">
                   <Zap className="w-3.5 h-3.5" />
