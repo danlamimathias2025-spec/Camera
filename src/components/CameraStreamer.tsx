@@ -124,7 +124,7 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
     localStorage.setItem('camera_stream_settings', JSON.stringify(newSettings));
   };
 
-  // Start camera with requested facing mode & configured stream quality
+  // Start camera with requested facing mode & progressive constraint fallbacks
   const startCamera = useCallback(async (desiredFacingMode: 'user' | 'environment') => {
     setPermissionError(null);
     facingModeRef.current = desiredFacingMode;
@@ -133,26 +133,46 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
         streamRef.current.getTracks().forEach(t => t.stop());
       }
 
-      const getResolutionDims = (res: string) => {
-        if (res === '1080p') return { width: 1920, height: 1080 };
-        if (res === '480p') return { width: 854, height: 480 };
-        if (res === '360p') return { width: 640, height: 360 };
-        return { width: 1280, height: 720 };
-      };
+      let mediaStream: MediaStream | null = null;
 
-      const dims = getResolutionDims(streamSettings.resolution);
+      const isMobile = typeof window !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: desiredFacingMode },
-          width: { ideal: dims.width },
-          height: { ideal: dims.height },
-          frameRate: { ideal: streamSettings.fps }
+      // Progressive camera constraints (avoids forced resolution dimension mismatches on back camera)
+      const constraintsList: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { ideal: desiredFacingMode },
+            ...(isMobile ? {} : { width: { ideal: 1280 }, height: { ideal: 720 } }),
+            frameRate: { ideal: streamSettings.fps }
+          },
+          audio: false
         },
-        audio: false
-      };
+        {
+          video: {
+            facingMode: desiredFacingMode
+          },
+          audio: false
+        },
+        {
+          video: true,
+          audio: false
+        }
+      ];
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      let lastErr: any = null;
+      for (const constraint of constraintsList) {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia(constraint);
+          if (mediaStream) break;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+
+      if (!mediaStream) {
+        throw lastErr || new Error('Camera device access failed');
+      }
+
       streamRef.current = mediaStream;
       setStream(mediaStream);
       setIsCameraActive(true);
@@ -161,6 +181,9 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
 
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch(() => {});
+        };
         videoRef.current.play().catch(() => {});
       }
 
@@ -203,7 +226,7 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
         }));
       }
     }
-  }, [wsRef, updateFirestorePresence]);
+  }, [wsRef, updateFirestorePresence, streamSettings]);
 
   // Switch Front/Back Lens
   const switchCameraFacingMode = useCallback((newMode?: 'user' | 'environment') => {
@@ -446,309 +469,267 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
   };
 
   return (
-    <div className="relative flex items-center justify-center min-h-screen py-2 px-1 select-none">
+    <div className="fixed inset-0 w-full h-full bg-black z-30 overflow-hidden flex flex-col justify-between select-none">
       
-      {/* Outer iPhone Pro Hardware Mockup Frame */}
-      <div className="relative w-[392px] h-[824px] max-w-[100vw] bg-[#1a1721] rounded-[54px] p-[10px] shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.15)] ring-1 ring-black flex flex-col justify-between overflow-hidden">
+      {/* Shutter flash animation overlay */}
+      {showShutterFlash && (
+        <div className="absolute inset-0 z-50 bg-white opacity-80 pointer-events-none transition-opacity duration-150" />
+      )}
+
+      {/* Hidden Canvas for video frame grabbing */}
+      <canvas ref={canvasRef} className="hidden" />
+
+      {/* Top Controls Bar Overlay */}
+      <div className="relative z-40 pt-4 px-5 pb-2 flex items-center justify-between text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent">
         
-        {/* Left Hardware Buttons Mockup */}
-        <div className="absolute -left-[14px] top-[115px] w-[4px] h-[28px] bg-[#3a3547] rounded-l-md" />
-        <div className="absolute -left-[14px] top-[165px] w-[4px] h-[50px] bg-[#3a3547] rounded-l-md" />
-        <div className="absolute -left-[14px] top-[228px] w-[4px] h-[50px] bg-[#3a3547] rounded-l-md" />
-        {/* Right Hardware Power Button Mockup */}
-        <div className="absolute -right-[14px] top-[180px] w-[4px] h-[75px] bg-[#3a3547] rounded-r-md" />
+        {/* Left Controls: Flash, Night Mode, Stream Quality Settings */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setFlashActive(!flashActive)}
+            className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all border border-white/10"
+            title="Flash"
+          >
+            <svg className={`w-5 h-5 ${flashActive ? 'text-amber-300 fill-amber-300' : 'text-white'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+          </button>
 
-        {/* Screen Display Area */}
-        <div className="relative w-full h-full bg-black rounded-[46px] overflow-hidden flex flex-col justify-between">
+          <button
+            onClick={() => setNightModeActive(!nightModeActive)}
+            className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all border border-white/10"
+            title="Night Mode"
+          >
+            <svg className={`w-5 h-5 ${nightModeActive ? 'text-amber-300' : 'text-white'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="8" />
+              <line x1="4" y1="4" x2="20" y2="20" />
+            </svg>
+          </button>
+
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="w-10 h-10 rounded-full bg-indigo-600/70 backdrop-blur-md flex items-center justify-center text-white hover:bg-indigo-600 active:scale-95 transition-all shadow-md border border-white/10"
+            title="Adjust Video Quality, FPS & Bitrate"
+          >
+            <Sliders className="w-4 h-4 text-white" />
+          </button>
+        </div>
+
+        {/* Center Chevron & Status Trigger */}
+        <button
+          onClick={() => setShowAccountMenu(!showAccountMenu)}
+          className="px-3.5 py-1.5 rounded-full bg-black/50 backdrop-blur-md flex items-center gap-1.5 text-xs font-semibold text-white hover:bg-black/70 active:scale-95 transition-all border border-white/10"
+          title="Camera Details & Settings"
+        >
+          <span>Camera</span>
+          <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+        </button>
+
+        {/* Right: Super Admin View Button (if Admin) */}
+        <div className="flex items-center">
+          {isAdmin ? (
+            <button
+              onClick={onOpenAdmin}
+              className="relative w-10 h-10 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 hover:scale-105 active:scale-95 transition-all border border-white/10"
+              title="Admin Dashboard / Live Cameras"
+            >
+              <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" strokeDasharray="1.8 2.5" strokeLinecap="round" />
+                <circle cx="12" cy="12" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+                <circle cx="12" cy="12" r="2" fill="currentColor" />
+              </svg>
+            </button>
+          ) : (
+            <div className="w-10 h-10" />
+          )}
+        </div>
+
+      </div>
+
+      {/* Account Profile Drawer (when chevron tapped) */}
+      {showAccountMenu && user && (
+        <div className="absolute top-[70px] left-4 right-4 z-50 max-w-md mx-auto p-4 bg-black/90 backdrop-blur-xl rounded-2xl border border-white/20 text-white space-y-3 animate-fade-in shadow-2xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-bold text-white">{user.name}</div>
+              <div className="text-[11px] text-slate-400">{user.email}</div>
+            </div>
+            {isAdmin && (
+              <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
+                Admin
+              </span>
+            )}
+          </div>
+          <div className="pt-2 border-t border-white/10 space-y-2">
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={() => startCamera(facingMode)}
+                className="flex-1 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-[11px] font-semibold text-center transition-colors"
+              >
+                Reload Camera
+              </button>
+              <button
+                onClick={logout}
+                className="flex-1 py-1.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
+              >
+                <LogOut className="w-3 h-3" />
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notice when Admin sends remote camera switch */}
+      {facingModeNotice && (
+        <div className="absolute top-[70px] left-4 right-4 z-40 max-w-md mx-auto p-2.5 rounded-xl bg-indigo-950/90 border border-indigo-700/80 text-white text-xs flex items-center gap-2 shadow-lg">
+          <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+          <span>{facingModeNotice}</span>
+        </div>
+      )}
+
+      {/* Camera Viewfinder Area (Edge to Edge) */}
+      <div className="relative flex-1 w-full bg-black overflow-hidden flex items-center justify-center">
+        
+        {/* Live Camera Stream Video */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`w-full h-full object-cover absolute inset-0 transition-transform duration-300 ${
+            !isCameraActive ? 'hidden' : 'block'
+          }`}
+          style={{
+            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'} scale(${getZoomScale()})`
+          }}
+        />
+
+        {/* Toast when photo is saved to phone storage */}
+        {saveToastNotice && (
+          <div className="absolute top-4 left-4 right-4 z-40 max-w-md mx-auto p-2.5 rounded-xl bg-black/85 backdrop-blur-md border border-emerald-500/60 text-white text-xs flex items-center justify-center gap-2 shadow-2xl animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-semibold text-center">{saveToastNotice}</span>
+          </div>
+        )}
+
+        {/* Permission or Inactive Camera prompt */}
+        {!isCameraActive && (
+          <div className="absolute inset-0 bg-[#0e0e12] flex flex-col items-center justify-center p-6 text-center text-white z-20 space-y-4">
+            <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
+              <svg className="w-8 h-8 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
+                <circle cx="12" cy="13" r="3" />
+              </svg>
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-white">Live Camera Inactive</p>
+              <p className="text-xs text-slate-400 max-w-[220px]">
+                {permissionError || 'Grant camera permission to begin streaming in real time'}
+              </p>
+            </div>
+            <button
+              onClick={() => startCamera(facingMode)}
+              className="px-5 py-2.5 bg-white text-black font-bold text-xs rounded-full hover:bg-slate-200 transition-colors shadow-lg active:scale-95"
+            >
+              Turn On Camera
+            </button>
+          </div>
+        )}
+
+        {/* Zoom Selector: .5   1x   3 */}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center bg-black/60 backdrop-blur-md rounded-full p-1 border border-white/10 shadow-lg">
+          {(['.5', '1x', '3'] as const).map(z => (
+            <button
+              key={z}
+              onClick={() => setZoomLevel(z)}
+              className={`w-8 h-8 rounded-full text-xs font-bold flex items-center justify-center transition-all ${
+                zoomLevel === z
+                  ? 'bg-black/90 text-[#eab308] border border-white/20 shadow-sm scale-110'
+                  : 'text-white/80 hover:text-white'
+              }`}
+            >
+              {z}
+            </button>
+          ))}
+        </div>
+
+      </div>
+
+      {/* Bottom Controls Area: Modes Carousel & Shutter Row */}
+      <div className="relative z-40 bg-gradient-to-t from-black via-black/90 to-transparent pb-6 pt-3 px-6 flex flex-col justify-between border-t border-white/5">
+        
+        {/* Camera Mode Text Carousel */}
+        <div className="flex items-center justify-center gap-6 text-xs font-bold tracking-wider py-2 overflow-x-hidden">
+          {(['CINEMATIC', 'VIDEO', 'PHOTO', 'PORTRAIT', 'PANO'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setCameraMode(mode)}
+              className={`transition-all whitespace-nowrap uppercase ${
+                cameraMode === mode
+                  ? 'text-[#e5a93c] font-black scale-105'
+                  : 'text-[#9e9e9e] hover:text-white'
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+
+        {/* Shutter Row: Thumbnail on Left, Shutter in Center, Flip Camera on Right */}
+        <div className="mt-3 flex items-center justify-between max-w-md mx-auto w-full">
           
-          {/* Shutter flash animation overlay */}
-          {showShutterFlash && (
-            <div className="absolute inset-0 z-50 bg-white opacity-80 pointer-events-none transition-opacity duration-150" />
-          )}
-
-          {/* Hidden Canvas for video frame grabbing */}
-          <canvas ref={canvasRef} className="hidden" />
-
-          {/* Top Dynamic Island and Status Header */}
-          <div className="relative z-40 pt-3 px-5 flex flex-col">
-            {/* Dynamic Island with Camera dot & Green Privacy Indicator */}
-            <div className="relative flex items-center justify-center h-8">
-              {/* Dynamic Island Capsule */}
-              <div className="w-[120px] h-[30px] bg-black rounded-full flex items-center justify-end pr-3 border border-white/5 shadow-md">
-                {/* Front camera lens reflection */}
-                <div className="w-3 h-3 rounded-full bg-[#081226] border border-[#1b263b] flex items-center justify-center">
-                  <div className="w-1 h-1 rounded-full bg-[#1e3a5f]" />
-                </div>
-              </div>
-
-              {/* iOS Green Recording Indicator Dot (Exact match to uploaded image) */}
-              <div className="absolute right-[85px] top-[12px] w-2 h-2 rounded-full bg-[#34c759] shadow-[0_0_6px_#34c759]" />
-            </div>
-
-            {/* iOS Top Bar Controls Row: Flash, Night/Live off, Chevron Up, White Dotted Icon (Admin) */}
-            <div className="mt-2 flex items-center justify-between text-white">
-              
-              {/* Left Group: Flash, Night Mode, Stream Quality Settings */}
-              <div className="flex items-center gap-2">
-                {/* Flash Toggle */}
-                <button
-                  onClick={() => setFlashActive(!flashActive)}
-                  className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all"
-                  title="Flash"
-                >
-                  <svg className={`w-[18px] h-[18px] ${flashActive ? 'text-amber-300 fill-amber-300' : 'text-white'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                  </svg>
-                </button>
-
-                {/* Night Mode / Live Off Icon */}
-                <button
-                  onClick={() => setNightModeActive(!nightModeActive)}
-                  className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all"
-                  title="Night Mode"
-                >
-                  <svg className={`w-[19px] h-[19px] ${nightModeActive ? 'text-amber-300' : 'text-white'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="8" />
-                    <line x1="4" y1="4" x2="20" y2="20" />
-                  </svg>
-                </button>
-
-                {/* Stream Quality Settings Button */}
-                <button
-                  onClick={() => setShowSettingsModal(true)}
-                  className="w-9 h-9 rounded-full bg-indigo-600/60 backdrop-blur-md flex items-center justify-center text-white hover:bg-indigo-600 active:scale-95 transition-all shadow-md"
-                  title="Adjust Video Quality, FPS & Bitrate"
-                >
-                  <Sliders className="w-4 h-4 text-white" />
-                </button>
-              </div>
-
-              {/* Center Chevron Indicator */}
-              <button
-                onClick={() => setShowAccountMenu(!showAccountMenu)}
-                className="w-7 h-7 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all"
-                title="Camera Details & Settings"
-              >
-                <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="18 15 12 9 6 15" />
+          {/* Photo Gallery Thumbnail (Left) */}
+          <div
+            onClick={handleShutterClick}
+            className="w-13 h-13 rounded-2xl bg-[#1c1c1e] border border-white/20 overflow-hidden shadow-md flex items-center justify-center cursor-pointer hover:opacity-90 active:scale-95 transition-all"
+            title="Recent Photo"
+          >
+            {capturedPhoto ? (
+              <img src={capturedPhoto} alt="Last capture" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full bg-[#202024] flex items-center justify-center text-slate-500">
+                <svg className="w-6 h-6 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <polyline points="21 15 16 10 5 21" />
                 </svg>
-              </button>
-
-              {/* Right: The White Dotted Icon (Admin Button) */}
-              <div className="flex items-center">
-                {isAdmin ? (
-                  <button
-                    onClick={onOpenAdmin}
-                    className="relative w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 hover:scale-105 active:scale-95 transition-all"
-                    title="Live Photos / Admin Dashboard"
-                  >
-                    {/* Concentric Dotted Live Photo Icon matching uploaded image */}
-                    <svg className="w-[22px] h-[22px] text-white" viewBox="0 0 24 24" fill="none">
-                      {/* Outer dotted circle */}
-                      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" strokeDasharray="1.8 2.5" strokeLinecap="round" />
-                      {/* Inner solid thin circle */}
-                      <circle cx="12" cy="12" r="5.5" stroke="currentColor" strokeWidth="1.4" />
-                      {/* Center solid dot */}
-                      <circle cx="12" cy="12" r="2" fill="currentColor" />
-                    </svg>
-                  </button>
-                ) : (
-                  /* Placeholder empty space so non-admins never see or click the admin button */
-                  <div className="w-9 h-9" />
-                )}
               </div>
-
-            </div>
+            )}
           </div>
 
-          {/* Account Profile Drawer (when chevron tapped) */}
-          {showAccountMenu && user && (
-            <div className="absolute top-[80px] left-4 right-4 z-50 p-4 bg-black/90 backdrop-blur-xl rounded-2xl border border-white/20 text-white space-y-3 animate-fade-in shadow-2xl">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-bold text-white">{user.name}</div>
-                  <div className="text-[11px] text-slate-400">{user.email}</div>
-                </div>
-                {isAdmin && (
-                  <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold">
-                    Admin
-                  </span>
-                )}
-              </div>
-              <div className="pt-2 border-t border-white/10 space-y-2">
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    onClick={() => startCamera(facingMode)}
-                    className="flex-1 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-[11px] font-semibold text-center transition-colors"
-                  >
-                    Reload Camera
-                  </button>
-                  <button
-                    onClick={logout}
-                    className="flex-1 py-1.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
-                  >
-                    <LogOut className="w-3 h-3" />
-                    Sign Out
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Notice when Admin sends remote camera switch */}
-          {facingModeNotice && (
-            <div className="absolute top-[80px] left-4 right-4 z-40 p-2.5 rounded-xl bg-indigo-950/90 border border-indigo-700/80 text-white text-xs flex items-center gap-2 shadow-lg">
-              <Info className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span>{facingModeNotice}</span>
-            </div>
-          )}
-
-          {/* 4:3 Camera Viewfinder Screen Area */}
-          <div className="relative flex-1 w-full bg-[#111] overflow-hidden my-1 flex items-center justify-center">
-            
-            {/* Live Camera Stream Video */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className={`absolute inset-0 w-full h-full object-cover transition-transform duration-300 ${
-                facingMode === 'user' ? 'scale-x-[-1]' : 'scale-x-1'
-              } ${!isCameraActive ? 'hidden' : 'block'}`}
-              style={{
-                transform: `scale(${getZoomScale()}) ${facingMode === 'user' ? 'scaleX(-1)' : ''}`
-              }}
+          {/* Shutter Button (Center) - Authentic Double Ring Style */}
+          <button
+            onClick={handleShutterClick}
+            className="w-[76px] h-[76px] rounded-full border-[4px] border-white p-[4px] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl"
+            title="Take Photo / Stream"
+          >
+            <div
+              className={`w-full h-full rounded-full transition-all duration-150 ${
+                cameraMode === 'VIDEO' ? 'bg-[#ff3b30] rounded-xl scale-75' : 'bg-white'
+              }`}
             />
+          </button>
 
-            {/* Toast when photo is saved to phone storage */}
-            {saveToastNotice && (
-              <div className="absolute top-4 left-4 right-4 z-40 p-2.5 rounded-xl bg-black/85 backdrop-blur-md border border-emerald-500/60 text-white text-xs flex items-center justify-center gap-2 shadow-2xl animate-fade-in">
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="font-semibold text-center">{saveToastNotice}</span>
-              </div>
-            )}
-
-            {/* Permission or Inactive Camera prompt */}
-            {!isCameraActive && (
-              <div className="absolute inset-0 bg-[#0e0e12] flex flex-col items-center justify-center p-6 text-center text-white z-20 space-y-4">
-                <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center border border-white/20">
-                  <svg className="w-8 h-8 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" />
-                    <circle cx="12" cy="13" r="3" />
-                  </svg>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-white">Live Camera Inactive</p>
-                  <p className="text-xs text-slate-400 max-w-[220px]">
-                    {permissionError || 'Grant camera permission to begin streaming in real time'}
-                  </p>
-                </div>
-                <button
-                  onClick={() => startCamera(facingMode)}
-                  className="px-5 py-2.5 bg-white text-black font-bold text-xs rounded-full hover:bg-slate-200 transition-colors shadow-lg active:scale-95"
-                >
-                  Turn On Camera
-                </button>
-              </div>
-            )}
-
-            {/* Zoom Selector: .5   1x   3 (Positioned inside the viewfinder near bottom) */}
-            <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center bg-black/55 backdrop-blur-md rounded-full p-1 border border-white/10 shadow-lg">
-              {(['.5', '1x', '3'] as const).map(z => (
-                <button
-                  key={z}
-                  onClick={() => setZoomLevel(z)}
-                  className={`w-7 h-7 rounded-full text-[11px] font-bold flex items-center justify-center transition-all ${
-                    zoomLevel === z
-                      ? 'bg-black/90 text-[#eab308] border border-white/20 shadow-sm scale-110'
-                      : 'text-white/80 hover:text-white'
-                  }`}
-                >
-                  {z}
-                </button>
-              ))}
-            </div>
-
-          </div>
-
-          {/* Bottom Controls Area: Modes Carousel, Shutter Row, and Home Bar */}
-          <div className="relative z-40 bg-black pb-5 pt-1 px-6 flex flex-col justify-between">
-            
-            {/* Camera Mode Text Carousel: CINEMATIC  VIDEO  PHOTO  PORTRAIT  PANO */}
-            <div className="flex items-center justify-center gap-5 text-[12px] font-bold tracking-wider py-2 overflow-x-hidden">
-              {(['CINEMATIC', 'VIDEO', 'PHOTO', 'PORTRAIT', 'PANO'] as const).map(mode => (
-                <button
-                  key={mode}
-                  onClick={() => setCameraMode(mode)}
-                  className={`transition-all whitespace-nowrap uppercase ${
-                    cameraMode === mode
-                      ? 'text-[#e5a93c] font-black scale-105'
-                      : 'text-[#9e9e9e] hover:text-white'
-                  }`}
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-
-            {/* Shutter Row: Thumbnail on Left, Shutter in Center, Flip Camera on Right */}
-            <div className="mt-2 flex items-center justify-between">
-              
-              {/* Photo Gallery Thumbnail (Left) */}
-              <div
-                onClick={handleShutterClick}
-                className="w-12 h-12 rounded-xl bg-[#1c1c1e] border border-white/20 overflow-hidden shadow-md flex items-center justify-center cursor-pointer hover:opacity-90 active:scale-95 transition-all"
-                title="Recent Photo"
-              >
-                {capturedPhoto ? (
-                  <img src={capturedPhoto} alt="Last capture" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full bg-[#202024] flex items-center justify-center text-slate-500">
-                    <svg className="w-5 h-5 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
-                    </svg>
-                  </div>
-                )}
-              </div>
-
-              {/* Shutter Button (Center) - Authentic Double Ring iOS Style */}
-              <button
-                onClick={handleShutterClick}
-                className="w-[72px] h-[72px] rounded-full border-[4px] border-white p-[3px] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl"
-                title="Take Photo / Stream"
-              >
-                <div
-                  className={`w-full h-full rounded-full transition-all duration-150 ${
-                    cameraMode === 'VIDEO' ? 'bg-[#ff3b30] rounded-xl scale-75' : 'bg-white'
-                  }`}
-                />
-              </button>
-
-              {/* Flip Camera Button (Right) - Front/Back Lens Toggle */}
-              <button
-                onClick={() => switchCameraFacingMode()}
-                className="w-12 h-12 rounded-full bg-[#2c2c2e]/80 backdrop-blur-md flex items-center justify-center text-white hover:bg-[#3a3a3c] active:rotate-180 transition-all duration-300 shadow-md"
-                title={`Switch to ${facingMode === 'user' ? 'Back' : 'Front'} Camera`}
-              >
-                {/* Authentic Apple Dual Arrow Camera Flip SVG */}
-                <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21 2v6h-6" />
-                  <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-                  <path d="M3 22v-6h6" />
-                  <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-                </svg>
-              </button>
-
-            </div>
-
-            {/* Apple Home Indicator Bar */}
-            <div className="w-[134px] h-[4px] bg-white/80 rounded-full mx-auto mt-4" />
-
-          </div>
+          {/* Flip Camera Button (Right) - Front/Back Lens Toggle */}
+          <button
+            onClick={() => switchCameraFacingMode()}
+            className="w-13 h-13 rounded-full bg-[#2c2c2e]/90 backdrop-blur-md flex items-center justify-center text-white hover:bg-[#3a3a3c] active:rotate-180 transition-all duration-300 shadow-md border border-white/10"
+            title={`Switch to ${facingMode === 'user' ? 'Back' : 'Front'} Camera`}
+          >
+            <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 2v6h-6" />
+              <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+              <path d="M3 22v-6h6" />
+              <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+            </svg>
+          </button>
 
         </div>
+
+        {/* Apple Home Indicator Bar */}
+        <div className="w-[134px] h-[4px] bg-white/70 rounded-full mx-auto mt-4" />
 
       </div>
 
