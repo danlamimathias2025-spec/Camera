@@ -1,0 +1,100 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique user identifier matching Firebase Auth UID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address",
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "User role: admin or user",
+          "enum": ["admin", "user"]
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp in ISO or server format",
+          "maxLength": 64
+        }
+      },
+      "required": ["id", "email", "name", "role"]
+    },
+    "LiveUser": {
+      "title": "LiveUser",
+      "description": "Real-time presence and camera streaming status of active users",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Unique user identifier matching Firebase Auth UID",
+          "maxLength": 128
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address",
+          "maxLength": 256
+        },
+        "name": {
+          "type": "string",
+          "description": "User display name",
+          "maxLength": 100
+        },
+        "role": {
+          "type": "string",
+          "description": "User authorization role",
+          "enum": ["admin", "user"]
+        },
+        "facingMode": {
+          "type": "string",
+          "description": "Current camera facing mode (user or environment)",
+          "enum": ["user", "environment"]
+        },
+        "isStreaming": {
+          "type": "boolean",
+          "description": "Whether camera stream is active"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether user is currently connected and active"
+        },
+        "connectedAt": {
+          "type": "string",
+          "description": "Connection timestamp",
+          "maxLength": 64
+        },
+        "lastSeen": {
+          "type": "string",
+          "description": "Last presence heartbeat timestamp",
+          "maxLength": 64
+        }
+      },
+      "required": ["userId", "email", "name", "role", "facingMode", "isStreaming", "active"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Individual user profiles stored by UID"
+    },
+    "/live_users/{userId}": {
+      "schema": "LiveUser",
+      "description": "Real-time active presence and live camera state per connected user"
+    }
+  }
+}

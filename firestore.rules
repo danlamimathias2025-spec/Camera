@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny all by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'danlamimathias2025@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data, userId) {
+      return data.id is string && data.id == userId &&
+        data.email is string && data.email.size() <= 256 &&
+        data.name is string && data.name.size() <= 100 &&
+        data.role in ['admin', 'user'];
+    }
+
+    function isValidLiveUser(data, userId) {
+      return data.userId is string && data.userId == userId &&
+        data.email is string && data.email.size() <= 256 &&
+        data.name is string && data.name.size() <= 100 &&
+        data.role in ['admin', 'user'] &&
+        data.facingMode in ['user', 'environment'] &&
+        data.isStreaming is bool &&
+        data.active is bool;
+    }
+
+    // User accounts collection
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId) && isOwner(userId) && isValidUser(request.resource.data, userId);
+      allow update: if isValidId(userId) && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data, userId);
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // Live presence and active stream state collection
+    match /live_users/{userId} {
+      allow get: if isValidId(userId) && isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isValidId(userId) && isOwner(userId) && isValidLiveUser(request.resource.data, userId);
+      allow update: if isValidId(userId) && (isOwner(userId) || isAdmin()) && (
+        isValidLiveUser(request.resource.data, userId) ||
+        // Admin remote switch allows updating facingMode
+        (isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['facingMode']))
+      );
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+    }
+
+    // Connection test document per skill
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}
