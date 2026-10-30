@@ -61,6 +61,12 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
   const isLongPressTriggeredRef = useRef<boolean>(false);
   const [isBurstActive, setIsBurstActive] = useState<boolean>(false);
 
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<any>(null);
+
   const viewfinderRef = useRef<HTMLDivElement | null>(null);
   const initialPinchDistRef = useRef<number | null>(null);
   const initialPinchZoomRef = useRef<number>(1.0);
@@ -539,8 +545,101 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
     }
   };
 
-  // Shutter action (takes photo snapshot, screen flash, and opens Image Preview Modal with 8K AI Enhancer)
+  // Apply hardware camera exposure for Low Light boost
+  const applyCameraHardwareExposure = useCallback((lowLight: boolean) => {
+    try {
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (track && typeof track.getCapabilities === 'function') {
+        const caps = track.getCapabilities() as any;
+        if (caps && caps.exposureCompensation) {
+          const targetExp = lowLight ? (caps.exposureCompensation.max || 2.0) : 0;
+          track.applyConstraints({
+            advanced: [{ exposureCompensation: targetExp } as any]
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {}
+  }, []);
+
+  const toggleLowLightMode = () => {
+    const nextState = !nightModeActive;
+    setNightModeActive(nextState);
+    applyCameraHardwareExposure(nextState);
+    setSaveToastNotice(nextState ? 'Low Light Mode ON (Exposure & Soft-Light Boost)' : 'Low Light Mode OFF');
+    setTimeout(() => setSaveToastNotice(null), 3000);
+  };
+
+  const startVideoRecording = () => {
+    if (!streamRef.current) {
+      startCamera(facingMode);
+      return;
+    }
+    recordedChunksRef.current = [];
+    try {
+      const options = { mimeType: 'video/webm;codecs=vp9,opus' };
+      const recorder = new MediaRecorder(streamRef.current, MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? options : { mimeType: 'video/webm' });
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+        const fileName = `VID_${dateStr}.webm`;
+
+        const downloadLink = document.createElement('a');
+        downloadLink.href = url;
+        downloadLink.download = fileName;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+
+        setSaveToastNotice(`Video saved to phone storage (${fileName})`);
+        setTimeout(() => setSaveToastNotice(null), 4000);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(250);
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(prev => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.warn('MediaRecorder start error:', err);
+      setSaveToastNotice('Video recording failed to start on this browser.');
+      setTimeout(() => setSaveToastNotice(null), 3000);
+    }
+  };
+
+  const stopVideoRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    }
+  };
+
+  // Shutter action (takes photo snapshot or starts/stops video recording in VIDEO mode)
   const handleShutterClick = () => {
+    if (cameraMode === 'VIDEO') {
+      if (isRecording) {
+        stopVideoRecording();
+      } else {
+        startVideoRecording();
+      }
+      return;
+    }
+
     setShowShutterFlash(true);
     setTimeout(() => setShowShutterFlash(false), 120);
 
@@ -692,13 +791,15 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
           </button>
 
           <button
-            onClick={() => setNightModeActive(!nightModeActive)}
-            className="w-10 h-10 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center text-white hover:bg-black/60 active:scale-95 transition-all border border-white/10"
-            title="Night Mode"
+            onClick={toggleLowLightMode}
+            className={`w-10 h-10 rounded-full backdrop-blur-md flex items-center justify-center transition-all border ${
+              nightModeActive ? 'bg-amber-400 text-black border-amber-300 shadow-lg shadow-amber-400/40 font-bold' : 'bg-black/40 text-white hover:bg-black/60 border-white/10'
+            }`}
+            title="Low Light Mode (Exposure & Soft-Light Boost)"
           >
-            <svg className={`w-5 h-5 ${nightModeActive ? 'text-amber-300' : 'text-white'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className={`w-5 h-5 ${nightModeActive ? 'fill-black' : 'fill-current'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="8" />
-              <line x1="4" y1="4" x2="20" y2="20" />
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41m12.72-12.72l-1.41 1.41" />
             </svg>
           </button>
 
@@ -803,7 +904,8 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             !isCameraActive ? 'hidden' : 'block'
           }`}
           style={{
-            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'}`
+            transform: `${facingMode === 'user' ? 'scaleX(-1)' : 'scaleX(1)'}`,
+            filter: nightModeActive ? 'brightness(2.3) contrast(1.25) saturate(1.15)' : 'none'
           }}
         />
 
@@ -919,7 +1021,7 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             )}
           </div>
 
-          {/* Shutter Button (Center) - Authentic Double Ring Style with Long-Press Burst Mode */}
+          {/* Shutter Button (Center) - Authentic Double Ring Style with Long-Press Burst Mode & Video Recording */}
           <button
             onMouseDown={handleShutterMouseDown}
             onMouseUp={handleShutterMouseUp}
@@ -927,16 +1029,26 @@ export const CameraStreamer: React.FC<CameraStreamerProps> = ({
             onTouchStart={handleShutterMouseDown}
             onTouchEnd={handleShutterMouseUp}
             className="w-[76px] h-[76px] rounded-full border-[4px] border-white p-[4px] flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl relative select-none"
-            title="Tap to take photo / Long-press for 5-photo burst mode"
+            title={cameraMode === 'VIDEO' ? (isRecording ? 'Tap to Stop Video Recording' : 'Tap to Start Video Recording') : 'Tap to take photo / Long-press for 5-photo burst mode'}
           >
             {isBurstActive && (
               <span className="absolute -top-7 px-2 py-0.5 rounded-full bg-amber-500 text-black text-[10px] font-black animate-bounce shadow-md">
                 BURST...
               </span>
             )}
+            {isRecording && (
+              <span className="absolute -top-7 px-2.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse shadow-md flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                REC {Math.floor(recordingSeconds / 60)}:{String(recordingSeconds % 60).padStart(2, '0')}
+              </span>
+            )}
             <div
               className={`w-full h-full rounded-full transition-all duration-150 ${
-                cameraMode === 'VIDEO' ? 'bg-[#ff3b30] rounded-xl scale-75' : isBurstActive ? 'bg-amber-400 scale-90' : 'bg-white'
+                cameraMode === 'VIDEO'
+                  ? (isRecording ? 'bg-rose-600 rounded-xl scale-75 animate-pulse' : 'bg-rose-600 rounded-full scale-90')
+                  : isBurstActive
+                  ? 'bg-amber-400 scale-90'
+                  : 'bg-white'
               }`}
             />
           </button>
